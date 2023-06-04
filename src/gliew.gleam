@@ -1,7 +1,10 @@
 import gleam/io
 import gleam/string
 import gleam/list
+import gleam/map.{Map}
 import gleam/result
+import gleam/base
+import gleam/crypto
 import gleam/option.{None, Option}
 import gleam/bit_builder
 import gleam/otp/actor
@@ -18,44 +21,44 @@ import nakai
 import nakai/html
 import nakai/html/attrs
 
-pub type Component(a, b) {
-  Component(render: fn(Request(Body)) -> html.Node(b))
+pub type Component(a) {
+  Component(render: fn(Request(Body)) -> html.Node(Component(a)))
   LiveComponent(
     mount: fn() -> Nil,
-    render: fn(Request(Body), Option(a)) -> html.Node(b),
+    render: fn(Request(Body), Option(a)) -> html.Node(Component(a)),
   )
 }
 
-pub fn component(render: fn(Request(Body)) -> html.Node(a)) {
+pub fn component(render: fn(Request(Body)) -> html.Node(Component(a))) {
   Component(render)
 }
 
 pub fn live_component(
   mount: fn() -> Nil,
-  render: fn(Request(Body), Option(a)) -> html.Node(b),
+  render: fn(Request(Body), Option(a)) -> html.Node(Component(a)),
 ) {
   LiveComponent(mount, render)
 }
 
 // Manager -----------------------------------------------
 
-type LoopState {
-  LoopState
+type LoopState(a) {
+  LoopState(sessions: Map(String, Component(a)))
 }
 
-type Message(a, b) {
+type Message(a) {
   RenderComponent(
-    from: Subject(html.Node(b)),
+    from: Subject(html.Node(Component(a))),
     request: Request(Body),
-    component: Component(a, b),
+    component: Component(a),
   )
 }
 
 fn start_manager() {
-  actor.start(LoopState, loop)
+  actor.start(LoopState(sessions: map.new()), loop)
 }
 
-fn loop(message: Message(a, b), state: LoopState) -> actor.Next(LoopState) {
+fn loop(message: Message(a), state: LoopState(a)) -> actor.Next(LoopState(a)) {
   case message {
     // Render a regular component
     RenderComponent(from, req, Component(render)) -> {
@@ -64,43 +67,57 @@ fn loop(message: Message(a, b), state: LoopState) -> actor.Next(LoopState) {
       actor.Continue(state)
     }
     // Render a live component
-    RenderComponent(from, req, LiveComponent(_, render)) -> {
+    RenderComponent(from, req, LiveComponent(mount, render)) -> {
+      // Create a session ID
+      let sess_id = "gliew-" <> random_string(10)
+
+      // Create a CSRD token
+      let csrf = "g-" <> random_string(24)
+
       process.send(
         from,
         render(req, None)
-        |> process_live_component,
+        |> process_live_component(sess_id, csrf),
       )
 
-      actor.Continue(state)
+      actor.Continue(LoopState(
+        sessions: state.sessions
+        |> map.insert(sess_id, LiveComponent(mount, render)),
+      ))
     }
   }
 }
 
-fn process_live_component(node: html.Node(a)) {
+fn process_live_component(node: html.Node(a), session_id: String, csrf: String) {
   case node {
     html.Element(tag, attrs, children) ->
       attrs
-      |> list.prepend(attrs.Attr("hx-ext", "ws"))
       |> list.prepend(attrs.Attr(
         "ws-connect",
-        "/connect?session=blabla&csrf=abcdefg",
+        "/connect?session=" <> session_id <> "&csrf=" <> csrf,
       ))
+      |> list.prepend(attrs.Attr("hx-ext", "ws"))
       |> html.Element(tag, _, children)
     node -> node
   }
 }
 
 fn render_component(
-  subject: Subject(Message(a, b)),
+  subject: Subject(Message(a)),
   request: Request(Body),
-  component: Component(a, b),
+  component: Component(a),
 ) {
   process.call(subject, RenderComponent(_, request, component), 1000)
 }
 
+fn random_string(len: Int) {
+  crypto.strong_random_bytes(len)
+  |> base.encode64(False)
+}
+
 // Server ------------------------------------------------
 
-pub fn serve(port: Int, handler: fn(Request(Body)) -> Component(a, b)) {
+pub fn serve(port: Int, handler: fn(Request(Body)) -> Component(a)) {
   use manager <- result.try(
     start_manager()
     |> result.map_error(fn(err) {
@@ -116,8 +133,8 @@ pub fn serve(port: Int, handler: fn(Request(Body)) -> Component(a, b)) {
 }
 
 fn handler_func(
-  manager: Subject(Message(a, b)),
-  handler: fn(Request(Body)) -> Component(a, b),
+  manager: Subject(Message(a)),
+  handler: fn(Request(Body)) -> Component(a),
 ) {
   // Return actual handler func
   fn(req: Request(Body)) {
@@ -164,14 +181,14 @@ fn handler_func(
   |> mist.handler_func
 }
 
-fn handle_ws_connect(_manager: Subject(Message(a, b)), request: Request(Body)) {
+fn handle_ws_connect(_manager: Subject(Message(a)), request: Request(Body)) {
   fn(msg, _subject: Subject(HandlerMessage)) {
-    io.debug(request)
     io.debug(msg)
     Ok(Nil)
   }
   |> websocket.with_handler
   |> websocket.on_init(fn(subject: Subject(HandlerMessage)) {
+    io.debug(request)
     io.println("on_init: " <> string.inspect(subject))
 
     process.sleep(1000)
