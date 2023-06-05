@@ -1,15 +1,3 @@
-# gliew
-
-[![Package Version](https://img.shields.io/hexpm/v/gliew)](https://hex.pm/packages/gliew)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/gliew/)
-
-An **experimental** web framework with server-side rendering and optional live updating UI (à la Phoenix's LiveView) for gleam.
-
-## Quick start
-
-Example:
-
-```gleam
 import gleam/int
 import gleam/string
 import gleam/option.{None, Some}
@@ -122,22 +110,3 @@ fn counter_mount(count_actor: Subject(CounterMessage)) {
   // Return an assign with the subject.
   gliew.assign(subject)
 }
-```
-
-The above example implementation can be found in `test/integration/counter.gleam` and quickly run with:
-
-```sh
-gleam run -m gliew/integration/counter
-```
-
-And then navigate to `http://localhost:8080/counter` to see in action.
-
-## Installation
-
-If available on Hex this package can be added to your Gleam project:
-
-```sh
-gleam add gliew
-```
-
-and its documentation can be found at <https://hexdocs.pm/gliew>.
