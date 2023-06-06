@@ -8,7 +8,7 @@ import gleam/option.{None, Option, Some}
 import gleam/uri
 import gleam/bit_builder
 import gleam/otp/actor
-import gleam/erlang/process.{Subject}
+import gleam/erlang/process.{Selector, Subject}
 import gleam/http.{Get}
 import gleam/http/request.{Request}
 import gleam/http/response
@@ -21,57 +21,152 @@ import nakai
 import nakai/html
 import nakai/html/attrs
 
-pub opaque type View(a, b) {
-  View(render: fn() -> String)
-  LiveView(
-    context: b,
-    mount: fn(b) -> Assign(a),
-    render: fn(String, Option(a)) -> String,
-  )
-}
+const sess_id_prefix = "gliew-"
 
-/// Creates a static view that is only rendered on
-/// the initial request.
-///
-pub fn view(render: fn() -> html.Node(a)) {
-  fn() {
-    render()
-    |> nakai.to_inline_string
-  }
-  |> View
-}
+const csrf_prefix = "g-"
 
-/// Creates a live updating view that will be kept
-/// in sync on the client after it connects back
-/// to the server.
-///
-pub fn live_view(
-  mount mount: fn(b) -> Assign(a),
-  with context: b,
-  render render: fn(Option(a)) -> html.Node(c),
-) {
-  LiveView(context, mount, wrap_render(render))
-}
+const elem_id_prefix = "g-"
 
-// This is used to a inject an id to the root of the
-// view markup, if not present already.
+// Event is a special type that can be added to attributes
+// in HTML tree elements.
+// That way we can just return a HTML tree of `html.Node(Event)`
+// and later walk the tree to extract various data from it.
 //
-fn wrap_render(render: fn(Option(a)) -> html.Node(b)) {
-  fn(id: String, param: Option(a)) {
-    case render(param) {
-      html.Element(tag, attrs, children) ->
-        case has_id(attrs) {
-          True -> attrs
-          False ->
-            attrs
-            |> list.prepend(attrs.id(id))
-        }
-        |> list.prepend(attrs.Attr("hx-swap-oob", "morph"))
-        |> html.Element(tag, _, children)
-      other -> other
-    }
-    |> nakai.to_inline_string
+pub opaque type Event {
+  // Instructs that the HTML node is the root of a mount
+  // and contains the selector function for the worker
+  // to know how to process updates.
+  Mount(selecting: fn(Selector(WorkerMessage)) -> Selector(WorkerMessage))
+}
+
+/// Creates a HTML node tree that will be `mounted`
+/// and receive live updates with data on `Subject(a)`
+/// returned by the mount function.
+///
+pub fn mount(
+  mount mount: fn(b) -> Subject(a),
+  with context: b,
+  render render: fn(Option(a)) -> html.Node(Event),
+) {
+  // Render initial node tree
+  let tree =
+    render(None)
+    |> process_tree(None)
+
+  // Get id from root element
+  let id = extract_id(tree)
+
+  // Add mount event to root of tree
+  fn(selector: Selector(WorkerMessage)) {
+    // Mount component to get subject
+    let subject = mount(context)
+
+    // Select and map subject
+    selector
+    |> process.selecting(
+      subject,
+      fn(val) {
+        render(Some(val))
+        |> process_tree(Some(id))
+        |> nakai.to_inline_string
+        |> LiveUpdate
+      },
+    )
   }
+  |> Mount
+  |> insert_event(tree)
+}
+
+// Insert the event to the node.
+//
+fn insert_event(event: Event, node: html.Node(Event)) {
+  case node {
+    html.Element(tag, attrs, children) ->
+      attrs
+      |> list.prepend(attrs.Event("gliew-event", event))
+      |> html.Element(tag, _, children)
+    html.LeafElement(tag, attrs) ->
+      attrs
+      |> list.prepend(attrs.Event("gliew-event", event))
+      |> html.LeafElement(tag, _)
+    other -> other
+  }
+}
+
+// Adds the id attribute to the node if provided, otherwise
+// generates it.
+//
+fn process_tree(node: html.Node(Event), id: Option(String)) {
+  case node {
+    html.Element(tag, attrs, children) ->
+      attrs
+      |> ensure_id(id)
+      |> html.Element(tag, _, children)
+    html.LeafElement(tag, attrs) ->
+      attrs
+      |> ensure_id(id)
+      |> html.LeafElement(tag, _)
+    other -> other
+  }
+}
+
+// Make sure there is an id attribute in the list of attributes.
+// If id is `None` it will generate one if there isn't one.
+// If id is `Some(id)` it will replace any id if there is one or
+// otherwise add it.
+//
+fn ensure_id(attrs: List(attrs.Attr(Event)), id: Option(String)) {
+  case has_id(attrs) {
+    True ->
+      case id {
+        Some(id) ->
+          list.map(
+            attrs,
+            fn(attr) {
+              case attr {
+                attrs.Attr("id", _) -> attrs.id(id)
+                other -> other
+              }
+            },
+          )
+        None -> attrs
+      }
+    False ->
+      attrs
+      |> list.prepend(attrs.id(
+        id
+        |> option.unwrap(random_id()),
+      ))
+  }
+}
+
+// Extract the ID value from a HTML node.
+//
+fn extract_id(node: html.Node(Event)) {
+  case node {
+    html.Element(_, attrs, _) -> find_id(attrs)
+    html.LeafElement(_, attrs) -> find_id(attrs)
+    _ -> Error(Nil)
+  }
+  |> result.unwrap(random_id())
+}
+
+// Find id attribute in a list of attrs.
+//
+fn find_id(attrs: List(attrs.Attr(Event))) {
+  attrs
+  |> list.find_map(fn(attr) {
+    case attr {
+      attrs.Attr("id", id) -> Ok(id)
+      _ -> Error(Nil)
+    }
+  })
+}
+
+// Generates a random ID for a HTML id attribute.
+//
+fn random_id() {
+  elem_id_prefix <> random_string(3)
 }
 
 // Check if list of attrs has id.
@@ -86,35 +181,27 @@ fn has_id(attrs: List(attrs.Attr(a))) {
   })
 }
 
-pub opaque type Assign(a) {
-  Assign(subject: Subject(a), unsubscribe: Option(fn() -> Nil))
-}
-
-/// Create an assign with a subject that will get new data.
-///
-pub fn assign(subject: Subject(a)) {
-  Assign(subject, None)
-}
-
-/// Add an unsubscribe function that will be called when the session
-/// worker exits.
-///
-pub fn unsubscribe(assign: Assign(a), with unsub: fn(Subject(a)) -> Nil) {
-  Assign(..assign, unsubscribe: Some(fn() { unsub(assign.subject) }))
-}
-
 // Manager -----------------------------------------------
 
-type LoopState(a, b) {
-  LoopState(sessions: Map(String, Session(a, b)))
+type LoopState {
+  LoopState(sessions: Map(String, Session))
 }
 
-type Session(a, b) {
-  Session(session_id: String, csrf: String, id: String, view: View(a, b))
+type Session {
+  Session(
+    id: String,
+    csrf: String,
+    selects: List(fn(Selector(WorkerMessage)) -> Selector(WorkerMessage)),
+    tree: html.Node(Event),
+  )
 }
 
-type Message(a, b) {
-  RenderView(from: Subject(String), request: Request(Body), view: View(a, b))
+type Message {
+  RenderTree(
+    from: Subject(String),
+    request: Request(Body),
+    tree: html.Node(Event),
+  )
   CheckConnect(from: Subject(Bool), id: String, csrf: String)
   DoConnect(id: String, socket: Subject(HandlerMessage))
 }
@@ -123,42 +210,41 @@ fn start_manager() {
   actor.start(LoopState(sessions: map.new()), loop)
 }
 
-fn loop(
-  message: Message(a, b),
-  state: LoopState(a, b),
-) -> actor.Next(LoopState(a, b)) {
+fn loop(message: Message, state: LoopState) -> actor.Next(LoopState) {
   case message {
-    // Render a regular view
-    RenderView(from, _, View(render)) -> {
-      process.send(from, render())
+    // Render tree
+    RenderTree(from, _, tree) ->
+      case extract_selects([], tree) {
+        // Regular static view
+        [] -> {
+          process.send(
+            from,
+            tree
+            |> nakai.to_inline_string,
+          )
 
-      actor.Continue(state)
-    }
-    // Render a live view
-    RenderView(from, _, LiveView(context, mount, render)) -> {
-      // Create a session ID
-      let sess_id = "gliew-" <> random_string(10)
+          actor.Continue(state)
+        }
+        selects -> {
+          // Create a session ID
+          let sess_id = sess_id_prefix <> random_string(10)
+          // Create a CSRF token
+          let csrf = csrf_prefix <> random_string(24)
 
-      // Create a CSRF token
-      let csrf = "g-" <> random_string(24)
+          process.send(
+            from,
+            tree
+            |> nakai.to_inline_string
+            |> wrap_live_view(sess_id, csrf),
+          )
 
-      // Create an id attr for the view.
-      let id = "g-" <> random_string(4)
+          actor.Continue(LoopState(
+            sessions: state.sessions
+            |> map.insert(sess_id, Session(sess_id, csrf, selects, tree)),
+          ))
+        }
+      }
 
-      process.send(
-        from,
-        render(id, None)
-        |> wrap_live_view(sess_id, csrf),
-      )
-
-      actor.Continue(LoopState(
-        sessions: state.sessions
-        |> map.insert(
-          sess_id,
-          Session(sess_id, csrf, id, LiveView(context, mount, render)),
-        ),
-      ))
-    }
     // Check if session is active
     CheckConnect(from, id, csrf) -> {
       case
@@ -170,6 +256,7 @@ fn loop(
       }
       actor.Continue(state)
     }
+
     // Start a connection worker
     DoConnect(id, socket) -> {
       // TODO: handle gracefully
@@ -178,7 +265,7 @@ fn loop(
         |> map.get(id)
       {
         Ok(sess) -> {
-          let _ = start_worker(sess.id, socket, sess.view)
+          let _ = start_worker(socket, sess.selects, sess.tree)
           Nil
         }
         Error(Nil) -> Nil
@@ -189,6 +276,52 @@ fn loop(
   }
 }
 
+// Walks the node tree until it finds a `Mount` event and adds
+// its select function to the list of of all select functions
+// in the tree.
+//
+fn extract_selects(
+  selects: List(fn(Selector(WorkerMessage)) -> Selector(WorkerMessage)),
+  node: html.Node(Event),
+) {
+  case node {
+    html.Element(_, attrs, children) ->
+      case extract_event(attrs) {
+        Ok(Mount(selector)) ->
+          selects
+          |> list.prepend(selector)
+        Error(Nil) ->
+          children
+          |> list.fold(selects, extract_selects)
+      }
+    html.LeafElement(_, attrs) ->
+      case extract_event(attrs) {
+        Ok(Mount(selector)) ->
+          selects
+          |> list.prepend(selector)
+        Error(Nil) -> selects
+      }
+    _ -> selects
+  }
+}
+
+// Extract a single gliew event attribute.
+//
+fn extract_event(attrs: List(attrs.Attr(Event))) {
+  attrs
+  |> list.find_map(fn(attr) {
+    case attr {
+      attrs.Event("gliew-event", event) -> Ok(event)
+      _ -> Error(Nil)
+    }
+  })
+}
+
+// Wrap a container around a node tree containing any
+// live mounts inside.
+// This instructs htmx to make a websocket connection back
+// to the server.
+//
 fn wrap_live_view(markup: String, session_id: String, csrf: String) {
   html.div(
     [
@@ -204,20 +337,20 @@ fn wrap_live_view(markup: String, session_id: String, csrf: String) {
   |> nakai.to_string
 }
 
-fn render_view(
-  subject: Subject(Message(a, b)),
+fn render_tree(
+  subject: Subject(Message),
   request: Request(Body),
-  view: View(a, b),
+  tree: html.Node(Event),
 ) {
-  process.call(subject, RenderView(_, request, view), 1000)
+  process.call(subject, RenderTree(_, request, tree), 1000)
 }
 
-fn check_connect(subject: Subject(Message(a, b)), id: String, csrf: String) {
+fn check_connect(subject: Subject(Message), id: String, csrf: String) {
   process.call(subject, CheckConnect(_, id, csrf), 1000)
 }
 
 fn do_connect(
-  subject: Subject(Message(a, b)),
+  subject: Subject(Message),
   id: String,
   socket: Subject(HandlerMessage),
 ) {
@@ -241,70 +374,54 @@ fn random_string(len: Int) {
 
 // Worker ------------------------------------------------
 
-type WorkerState(a) {
-  WorkerState(
-    id: String,
-    socket: Subject(HandlerMessage),
-    subject: Subject(a),
-    render: fn(String, Option(a)) -> String,
-    on_close: fn() -> Nil,
-  )
+type WorkerState {
+  WorkerState(socket: Subject(HandlerMessage), tree: html.Node(Event))
 }
 
-type WorkerMessage(a) {
-  NewData(data: a)
+type WorkerMessage {
+  LiveUpdate(markup: String)
 }
 
-fn start_worker(id: String, socket: Subject(HandlerMessage), view: View(a, b)) {
+fn start_worker(
+  socket: Subject(HandlerMessage),
+  selects: List(fn(Selector(WorkerMessage)) -> Selector(WorkerMessage)),
+  tree: html.Node(Event),
+) {
   actor.start_spec(actor.Spec(
     init: fn() {
-      case view {
-        View(_) -> actor.Failed("not live view")
-        LiveView(context, mount, render) -> {
-          // Call mount for the live view.
-          let assign = mount(context)
+      let selector =
+        process.new_selector()
+        |> apply_selects(selects)
 
-          // Create a mapping selector for live view's subject.
-          let selector =
-            process.new_selector()
-            |> process.selecting(assign.subject, fn(data) { NewData(data) })
-
-          actor.Ready(
-            WorkerState(
-              id,
-              socket,
-              assign.subject,
-              render,
-              assign.unsubscribe
-              |> option.unwrap(fn() { Nil }),
-            ),
-            selector,
-          )
-        }
-      }
+      actor.Ready(WorkerState(socket, tree), selector)
     },
     init_timeout: 1000,
     loop: worker_loop,
   ))
 }
 
-fn worker_loop(msg: WorkerMessage(a), state: WorkerState(a)) {
+fn worker_loop(msg: WorkerMessage, state: WorkerState) {
   case msg {
-    NewData(data) -> {
-      // Send rendered view to websocket.
-      websocket.send(
-        state.socket,
-        TextMessage(state.render(state.id, Some(data))),
-      )
+    LiveUpdate(markup) -> {
+      // Send updated markup to websocket
+      websocket.send(state.socket, TextMessage(markup))
 
       actor.Continue(state)
     }
   }
 }
 
+fn apply_selects(
+  selector: Selector(WorkerMessage),
+  selects: List(fn(Selector(WorkerMessage)) -> Selector(WorkerMessage)),
+) {
+  selector
+  |> list.fold(selects, _, fn(selector, selecting) { selecting(selector) })
+}
+
 // Server ------------------------------------------------
 
-pub fn serve(port: Int, handler: fn(Request(Body)) -> View(a, b)) {
+pub fn serve(port: Int, handler: fn(Request(Body)) -> html.Node(Event)) {
   use manager <- result.try(
     start_manager()
     |> result.map_error(fn(err) {
@@ -320,8 +437,8 @@ pub fn serve(port: Int, handler: fn(Request(Body)) -> View(a, b)) {
 }
 
 fn handler_func(
-  manager: Subject(Message(a, b)),
-  handler: fn(Request(Body)) -> View(a, b),
+  manager: Subject(Message),
+  handler: fn(Request(Body)) -> html.Node(Event),
 ) {
   // Return actual handler func
   fn(req: Request(Body)) {
@@ -355,7 +472,7 @@ fn handler_func(
                   tag: "script",
                   attrs: [
                     attrs.src(
-                      "https://unpkg.com/idiomorph/dist/idiomorph-ext.min.js",
+                      "https://unpkg.com/idiomorph@0.0.8/dist/idiomorph-ext.min.js",
                     ),
                   ],
                   children: [],
@@ -363,7 +480,7 @@ fn handler_func(
               ]),
               html.Body(
                 attrs: [],
-                children: [html.UnsafeText(render_view(manager, req, view))],
+                children: [html.UnsafeText(render_tree(manager, req, view))],
               ),
             ],
           )
@@ -377,7 +494,7 @@ fn handler_func(
   |> mist.handler_func
 }
 
-fn handle_ws_connect(manager: Subject(Message(a, b)), req: Request(Body)) {
+fn handle_ws_connect(manager: Subject(Message), req: Request(Body)) {
   case parse_params(req) {
     Ok(#(id, csrf)) -> upgrade_connection(manager, id, csrf)
     Error(Nil) ->
@@ -386,11 +503,7 @@ fn handle_ws_connect(manager: Subject(Message(a, b)), req: Request(Body)) {
   }
 }
 
-fn upgrade_connection(
-  manager: Subject(Message(a, b)),
-  session: String,
-  csrf: String,
-) {
+fn upgrade_connection(manager: Subject(Message), session: String, csrf: String) {
   case check_connect(manager, session, csrf) {
     False ->
       response.new(401)
