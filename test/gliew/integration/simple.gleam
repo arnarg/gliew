@@ -10,8 +10,12 @@ pub fn main() {
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
-          Get, ["hello"] -> html.div_text([], "Hello gleam!")
-          _, _ -> html.div_text([], "Hello world!")
+          Get, ["hello"] ->
+            html.div_text([], "Hello gleam!")
+            |> gliew.view(200)
+          _, _ ->
+            html.div_text([], "Hello world!")
+            |> gliew.view(200)
         }
       },
     )

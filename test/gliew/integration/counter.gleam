@@ -67,9 +67,6 @@ fn counter_loop(msg: CounterMessage, state: CounterState) {
       // dead processes.
       let new_subscribers = send_to_all(0, state.subscribers)
 
-      // Send an increment to ourselves in a second.
-      process.send_after(state.self, 1000, Increment)
-
       // Continue actor.
       actor.Continue(
         CounterState(..state, counter: 0, subscribers: new_subscribers),
@@ -121,6 +118,10 @@ fn send_to_all(counter: Int, subscribers: List(Subject(Int))) {
 
 pub fn get_current(count_actor: Subject(CounterMessage)) {
   process.call(count_actor, GetCurrent, 1000)
+}
+
+pub fn reset(count_actor: Subject(CounterMessage)) {
+  process.send(count_actor, Reset)
 }
 
 pub fn subscribe(count_actor: Subject(CounterMessage), subscriber: Subject(Int)) {

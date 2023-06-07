@@ -11,7 +11,9 @@ pub fn main() {
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
-          _, _ -> html.div([], [html.div_text([], "counter is at:"), counter()])
+          _, _ ->
+            html.div([], [html.div_text([], "counter is at:"), counter()])
+            |> gliew.view(200)
         }
       },
     )
@@ -23,7 +25,7 @@ pub fn main() {
 fn counter() {
   // Here we use the `use` syntax as kind of a decorator
   // to turn this function into a live mount.
-  use assign <- gliew.mount(mount_counter, with: Nil)
+  use assign <- gliew.live_mount(mount_counter, with: Nil)
 
   html.div_text(
     [],

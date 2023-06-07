@@ -16,13 +16,14 @@ pub fn main() {
               [],
               [
                 html.div_text([], "counter is at:"),
-                gliew.mount(
+                gliew.live_mount(
                   mount: mount_counter,
                   with: Nil,
                   render: render_counter,
                 ),
               ],
             )
+            |> gliew.view(200)
         }
       },
     )
