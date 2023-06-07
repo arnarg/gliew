@@ -22,8 +22,12 @@ pub fn main() {
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
-          Get, ["hello"] -> html.div_text([], "Hello gleam!")
-          _, _ -> html.div_text([], "Hello world!")
+          Get, ["hello"] ->
+            html.div_text([], "Hello gleam!")
+            |> gliew.view(200)
+          _, _ ->
+            html.div_text([], "Hello world!")
+            |> gliew.view(200)
         }
       },
     )
@@ -36,7 +40,7 @@ pub fn main() {
 
 In order to have some elements of the HTML live updating you will need to use live mounts.
 
-They can be either used by calling the `gliew.mount` function directly:
+They can be either used by calling the `gliew.live_mount` function directly:
 
 ```gleam
 import gleam/int
@@ -57,13 +61,14 @@ pub fn main() {
               [],
               [
                 html.div_text([], "counter is at:"),
-                gliew.mount(
+                gliew.live_mount(
                   mount: mount_counter,
                   with: Nil,
                   render: render_counter,
                 ),
               ],
             )
+            |> gliew.view(200)
         }
       },
     )
@@ -117,7 +122,9 @@ pub fn main() {
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
-          _, _ -> html.div([], [html.div_text([], "counter is at:"), counter()])
+          _, _ ->
+            html.div([], [html.div_text([], "counter is at:"), counter()])
+            |> gliew.view(200)
         }
       },
     )
@@ -129,7 +136,7 @@ pub fn main() {
 fn counter() {
   // Here we use the `use` syntax as kind of a decorator
   // to turn this function into a live mount.
-  use assign <- gliew.mount(mount_counter, with: Nil)
+  use assign <- gliew.live_mount(mount_counter, with: Nil)
 
   html.div_text(
     [],
@@ -165,7 +172,7 @@ import gleam/int
 import gleam/string
 import gleam/base
 import gleam/option.{None, Some}
-import gleam/http.{Get}
+import gleam/http.{Get, Post}
 import gleam/http/request
 import gleam/erlang/process.{Subject}
 import gleam/crypto.{strong_random_bytes}
@@ -176,7 +183,9 @@ import gliew
 // It implements an actor that keeps an
 // incrementing counter and can be
 // subscribed to.
-import gliew/integration/counter.{CounterMessage, start_counter, subscribe}
+import gliew/integration/counter.{
+  CounterMessage, reset, start_counter, subscribe,
+}
 
 pub fn main() {
   // Start anything that will be needed by the handlers.
@@ -195,8 +204,13 @@ pub fn main() {
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
-          Get, ["mounts"] -> mounts_page(count_actor)
-          _, _ -> home_page()
+          Get, ["mounts"] ->
+            mounts_page(count_actor)
+            |> gliew.view(200)
+          Post, ["counter", "reset"] -> reset_counter(count_actor)
+          _, _ ->
+            home_page()
+            |> gliew.view(200)
         }
       },
     )
@@ -207,6 +221,12 @@ pub fn main() {
 // a static page.
 fn home_page() {
   html.div_text([], "Hello gleam!")
+}
+
+fn reset_counter(count_actor: Subject(CounterMessage)) {
+  reset(count_actor)
+
+  gliew.response(204)
 }
 
 fn mounts_page(count_actor: Subject(CounterMessage)) {
@@ -228,6 +248,13 @@ fn mounts_page(count_actor: Subject(CounterMessage)) {
       // Counter
       html.div_text([attrs.style("font-size: x-large")], "Counter is at"),
       counter(count_actor),
+      html.div(
+        [],
+        [
+          html.button_text([], "Reset")
+          |> gliew.on_click(do: Post, to: "/counter/reset"),
+        ],
+      ),
       // Explanation text
       html.div(
         [
@@ -261,14 +288,14 @@ fn mounts_page(count_actor: Subject(CounterMessage)) {
 // A live mount that shows a live updating counter.
 fn counter(count_actor: Subject(CounterMessage)) {
   // Makes the function a live mount.
-  // The second parameter passed to `gliew.mount` will
+  // The second parameter passed to `gliew.live_mount` will
   // be passed to the mount function (first parameter)
   // when the mount is mounted (i.e. the client connects
   // back to the server to get live updates).
   //
   // The returned value is of type `Option(a)` where
   // `a` is the type in the Subject returned by mount.
-  use assign <- gliew.mount(counter_mount, with: count_actor)
+  use assign <- gliew.live_mount(counter_mount, with: count_actor)
 
   let text = case assign {
     // View has been mounted and we want to use the
@@ -308,7 +335,7 @@ fn counter_mount(count_actor: Subject(CounterMessage)) {
 
 // A live mount that renders random text on an interval.
 fn random_text() {
-  use assign <- gliew.mount(text_mount, with: Nil)
+  use assign <- gliew.live_mount(text_mount, with: Nil)
 
   html.div_text(
     [attrs.style("font-size: xx-large")],
@@ -340,7 +367,7 @@ fn random_string() {
   strong_random_bytes(10)
   |> base.encode64(False)
 }
-```
+````
 
 The above example implementation can be found in `test/integration/live_mounts.gleam` and quickly run with:
 
