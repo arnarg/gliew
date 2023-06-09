@@ -29,7 +29,7 @@ const elem_id_prefix = "g-"
 //
 pub opaque type Response {
   View(status: Int, headers: List(#(String, String)), node: html.Node(Event))
-  Response(status: Int, headers: List(#(String, String)))
+  Response(status: Int, headers: List(#(String, String)), body: Option(String))
 }
 
 /// Creates a view response.
@@ -41,7 +41,7 @@ pub fn view(node: html.Node(Event), status: Int) {
 /// Creates an empty response without a body.
 ///
 pub fn response(status: Int) {
-  Response(status, [])
+  Response(status, [], None)
 }
 
 /// Adds a header to a response.
@@ -52,10 +52,19 @@ pub fn with_header(response: Response, key key: String, value value: String) {
       headers
       |> list.prepend(#(key, value))
       |> View(status, _, node)
-    Response(status, headers) ->
+    Response(status, headers, body) ->
       headers
       |> list.prepend(#(key, value))
-      |> Response(status, _)
+      |> Response(status, _, body)
+  }
+}
+
+/// Sets body of a response.
+///
+pub fn with_body(response: Response, body: String) {
+  case response {
+    Response(status, headers, _) -> Response(status, headers, Some(body))
+    _ -> response
   }
 }
 
@@ -284,7 +293,7 @@ fn handler_func(
       Get, "/connect" -> handle_ws_connect(manager, req)
       _, _ ->
         case handler(req) {
-          Response(status, headers) ->
+          Response(status, headers, body) ->
             response.new(status)
             |> list.fold(
               headers,
@@ -294,7 +303,7 @@ fn handler_func(
                 |> response.prepend_header(pair.0, pair.1)
               },
             )
-            |> mist.empty_response
+            |> to_mist_response(body)
           View(status, headers, node) ->
             response.new(status)
             |> list.fold(
@@ -353,6 +362,17 @@ fn handler_func(
     }
   }
   |> mist.handler_func
+}
+
+fn to_mist_response(response, body: Option(String)) {
+  case body {
+    Some(body) ->
+      response
+      |> mist.bit_builder_response(bit_builder.from_string(body))
+    None ->
+      response
+      |> mist.empty_response
+  }
 }
 
 fn handle_ws_connect(manager: Subject(ManagerMessage), req: Request(Body)) {
