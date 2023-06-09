@@ -80,7 +80,7 @@ pub fn live_mount(
   // Render initial node tree
   let tree =
     render(None)
-    |> process_tree(None)
+    |> process_tree(None, False)
 
   // Get id from root element
   let id = extract_id(tree)
@@ -96,8 +96,7 @@ pub fn live_mount(
       subject,
       fn(val) {
         render(Some(val))
-        |> process_tree(Some(id))
-        |> add_morph_attr
+        |> process_tree(Some(id), True)
         |> nakai.to_inline_string
         |> LiveUpdate
       },
@@ -137,6 +136,20 @@ pub fn on_click(node: html.Node(Event), do method: http.Method, to path: String)
   }
 }
 
+/// Makes the live mount morph the diff of the innerHTML
+/// instead of replacing the whole thing.
+///
+pub fn morph() {
+  attrs.Event("gliew-event", event.Morph)
+}
+
+/// Append the innerHTML of the live mount instead of
+/// replacing it.
+///
+pub fn append() {
+  attrs.Event("gliew-event", event.Append)
+}
+
 // Add an attribute to the provided node.
 //
 fn add_attr(node: html.Node(Event), attr: attrs.Attr(Event)) {
@@ -170,28 +183,43 @@ fn insert_event(event: Event, node: html.Node(Event)) {
   |> add_attr(attrs.Event("gliew-event", event))
 }
 
-// Adds an attribute to the node that instructs
-// htmx to morph the DOM in-place.
-//
-fn add_morph_attr(node: html.Node(Event)) {
-  node
-  |> add_attr(attrs.Attr("hx-swap-oob", "morph"))
-}
-
 // Adds the id attribute to the node if provided, otherwise
 // generates it.
 //
-fn process_tree(node: html.Node(Event), id: Option(String)) {
+fn process_tree(node: html.Node(Event), id: Option(String), render_events: Bool) {
   case node {
     html.Element(tag, attrs, children) ->
       attrs
       |> ensure_id(id)
+      |> map_events(render_events)
       |> html.Element(tag, _, children)
     html.LeafElement(tag, attrs) ->
       attrs
       |> ensure_id(id)
+      |> map_events(render_events)
       |> html.LeafElement(tag, _)
     other -> other
+  }
+}
+
+// Transforms event attributes into actual htmx attributes.
+//
+fn map_events(attrs: List(attrs.Attr(Event)), render_events: Bool) {
+  case render_events {
+    True ->
+      list.map(
+        attrs,
+        fn(attr) {
+          case attr {
+            attrs.Event("gliew-event", event.Morph) ->
+              attrs.Attr("hx-swap-oob", "morph")
+            attrs.Event("gliew-event", event.Append) ->
+              attrs.Attr("hx-swap-oob", "beforeend")
+            other -> other
+          }
+        },
+      )
+    False -> attrs
   }
 }
 

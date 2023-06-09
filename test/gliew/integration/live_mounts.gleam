@@ -141,7 +141,7 @@ fn counter(count_actor: Subject(CounterMessage)) {
   }
 
   // Return the HTML of the view.
-  html.div_text([attrs.style("font-size: xx-large")], text)
+  html.div_text([attrs.style("font-size: xx-large"), gliew.morph()], text)
 }
 
 // A mount function that runs once the client connects through
@@ -168,7 +168,7 @@ fn random_text() {
   use assign <- gliew.live_mount(text_mount, with: Nil)
 
   html.div_text(
-    [attrs.style("font-size: xx-large")],
+    [attrs.style("font-size: xx-large"), gliew.morph()],
     assign
     |> option.unwrap(random_string()),
   )

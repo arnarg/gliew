@@ -11,4 +11,10 @@ pub type Event {
   // and contains the selector function for the worker
   // to know how to process updates.
   LiveMount(selecting: fn(Selector(WorkerMessage)) -> Selector(WorkerMessage))
+  // Instructs us to add a `hx-swap-oob="morph"` to the
+  // mount.
+  Morph
+  // Instruct us to add `hx-swap-oob="beforeend"` to the
+  // mount.
+  Append
 }
