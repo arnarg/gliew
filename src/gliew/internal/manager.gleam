@@ -32,8 +32,8 @@ type Session {
 }
 
 pub type Message {
-  RenderTree(
-    from: Subject(String),
+  ProcessTree(
+    from: Subject(html.Node(Event)),
     request: Request(Body),
     tree: html.Node(Event),
   )
@@ -50,16 +50,12 @@ pub fn start_manager() {
 
 fn loop(message: Message, state: LoopState) -> actor.Next(LoopState) {
   case message {
-    // Render tree
-    RenderTree(from, _, tree) ->
+    // Process tree
+    ProcessTree(from, _, tree) ->
       case extract_selects([], tree) {
         // Regular static view
         [] -> {
-          process.send(
-            from,
-            tree
-            |> nakai.to_inline_string,
-          )
+          process.send(from, tree)
 
           actor.Continue(state)
         }
@@ -72,7 +68,6 @@ fn loop(message: Message, state: LoopState) -> actor.Next(LoopState) {
           process.send(
             from,
             tree
-            |> nakai.to_inline_string
             |> wrap_live_view(sess_id, csrf),
           )
 
@@ -200,7 +195,7 @@ fn extract_event(attrs: List(attrs.Attr(Event))) {
 // This instructs htmx to make a websocket connection back
 // to the server.
 //
-fn wrap_live_view(markup: String, session_id: String, csrf: String) {
+fn wrap_live_view(markup: html.Node(Event), session_id: String, csrf: String) {
   html.div(
     [
       attrs.Attr("hx-ext", "ws"),
@@ -210,17 +205,16 @@ fn wrap_live_view(markup: String, session_id: String, csrf: String) {
       ),
       attrs.Attr("hx-ext", "morph"),
     ],
-    [html.UnsafeText(markup)],
+    [markup],
   )
-  |> nakai.to_string
 }
 
-pub fn render_tree(
+pub fn process_tree(
   subject: Subject(Message),
   request: Request(Body),
   tree: html.Node(Event),
 ) {
-  process.call(subject, RenderTree(_, request, tree), 1000)
+  process.call(subject, ProcessTree(_, request, tree), 1000)
 }
 
 pub fn get_worker(manager: Subject(Message), id: String, csrf: String) {

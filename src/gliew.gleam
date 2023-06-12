@@ -9,7 +9,7 @@ import gleam/otp/actor
 import gleam/erlang/process.{Selector, Subject}
 import gleam/http.{Get}
 import gleam/http/request.{Request}
-import gleam/http/response
+import gleam/http/response.{Response as HttpResponse}
 import mist.{Body}
 import mist/websocket
 import glisten
@@ -296,7 +296,58 @@ fn has_id(attrs: List(attrs.Attr(a))) {
 
 // Server ------------------------------------------------
 
-pub fn serve(port: Int, handler: fn(Request(Body)) -> Response) {
+/// Returns script tags to put into your own layout in order
+/// for live mounts to work.
+///
+pub fn script() {
+  html.Fragment([
+    html.Element(
+      tag: "script",
+      attrs: [attrs.src("https://unpkg.com/htmx.org@1.9.2/dist/htmx.min.js")],
+      children: [],
+    ),
+    html.Element(
+      tag: "script",
+      attrs: [attrs.src("https://unpkg.com/htmx.org@1.9.2/dist/ext/ws.js")],
+      children: [],
+    ),
+    html.Element(
+      tag: "script",
+      attrs: [
+        attrs.src("https://unpkg.com/idiomorph@0.0.8/dist/idiomorph-ext.min.js"),
+      ],
+      children: [],
+    ),
+  ])
+}
+
+fn default_layout(content: html.Node(Event)) {
+  html.Html(
+    [],
+    [html.Head([script()]), html.Body(attrs: [], children: [content])],
+  )
+}
+
+/// Configuration for a server.
+///
+pub type Server {
+  Server(
+    port: Int,
+    layout: fn(html.Node(Event)) -> html.Node(Event),
+    handler: fn(Request(Body)) -> Response,
+  )
+}
+
+/// Creates a configuration for a server with default
+/// layout.
+///
+pub fn new(port: Int, handler: fn(Request(Body)) -> Response) {
+  Server(port, default_layout, handler)
+}
+
+/// Start server.
+///
+pub fn serve(server: Server) {
   use manager <- result.try(
     manager.start_manager()
     |> result.map_error(fn(err) {
@@ -308,11 +359,12 @@ pub fn serve(port: Int, handler: fn(Request(Body)) -> Response) {
     }),
   )
 
-  mist.serve(port, handler_func(manager, handler))
+  mist.serve(server.port, handler_func(manager, server.layout, server.handler))
 }
 
 fn handler_func(
   manager: Subject(ManagerMessage),
+  layout: fn(html.Node(Event)) -> html.Node(Event),
   handler: fn(Request(Body)) -> Response,
 ) {
   // Return actual handler func
@@ -323,73 +375,32 @@ fn handler_func(
         case handler(req) {
           Response(status, headers, body) ->
             response.new(status)
-            |> list.fold(
-              headers,
-              _,
-              fn(res, pair) {
-                res
-                |> response.prepend_header(pair.0, pair.1)
-              },
-            )
+            |> add_headers(headers)
             |> to_mist_response(body)
           View(status, headers, node) ->
             response.new(status)
-            |> list.fold(
-              headers,
-              _,
-              fn(res, pair) {
-                res
-                |> response.prepend_header(pair.0, pair.1)
-              },
-            )
+            |> add_headers(headers)
             |> mist.bit_builder_response(
-              html.Html(
-                [],
-                [
-                  html.Head([
-                    html.Element(
-                      tag: "script",
-                      attrs: [
-                        attrs.src(
-                          "https://unpkg.com/htmx.org@1.9.2/dist/htmx.min.js",
-                        ),
-                      ],
-                      children: [],
-                    ),
-                    html.Element(
-                      tag: "script",
-                      attrs: [
-                        attrs.src(
-                          "https://unpkg.com/htmx.org@1.9.2/dist/ext/ws.js",
-                        ),
-                      ],
-                      children: [],
-                    ),
-                    html.Element(
-                      tag: "script",
-                      attrs: [
-                        attrs.src(
-                          "https://unpkg.com/idiomorph@0.0.8/dist/idiomorph-ext.min.js",
-                        ),
-                      ],
-                      children: [],
-                    ),
-                  ]),
-                  html.Body(
-                    attrs: [],
-                    children: [
-                      html.UnsafeText(manager.render_tree(manager, req, node)),
-                    ],
-                  ),
-                ],
-              )
-              |> nakai.to_string
-              |> bit_builder.from_string,
+              manager.process_tree(manager, req, node)
+              |> layout
+              |> nakai.to_string_builder
+              |> bit_builder.from_string_builder,
             )
         }
     }
   }
   |> mist.handler_func
+}
+
+fn add_headers(response: HttpResponse(a), headers: List(#(String, String))) {
+  headers
+  |> list.fold(
+    response,
+    fn(res, pair) {
+      res
+      |> response.prepend_header(pair.0, pair.1)
+    },
+  )
 }
 
 fn to_mist_response(response, body: Option(String)) {

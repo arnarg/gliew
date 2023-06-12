@@ -18,7 +18,7 @@ import gliew
 
 pub fn main() {
   let assert Ok(_) =
-    gliew.serve(
+    gliew.new(
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
@@ -31,6 +31,7 @@ pub fn main() {
         }
       },
     )
+    |> gliew.serve
 
   process.sleep_forever()
 }
@@ -52,7 +53,7 @@ import gliew
 
 pub fn main() {
   let assert Ok(_) =
-    gliew.serve(
+    gliew.new(
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
@@ -72,6 +73,7 @@ pub fn main() {
         }
       },
     )
+    |> gliew.serve
 
   process.sleep_forever()
 }
@@ -118,7 +120,7 @@ import gliew
 
 pub fn main() {
   let assert Ok(_) =
-    gliew.serve(
+    gliew.new(
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
@@ -128,6 +130,7 @@ pub fn main() {
         }
       },
     )
+    |> gliew.serve
 
   process.sleep_forever()
 }
@@ -200,7 +203,7 @@ pub fn main() {
   // rendering your views and starting workers for
   // live connections.
   let assert Ok(_) =
-    gliew.serve(
+    gliew.new(
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
@@ -214,6 +217,8 @@ pub fn main() {
         }
       },
     )
+    |> gliew.serve
+
   process.sleep_forever()
 }
 

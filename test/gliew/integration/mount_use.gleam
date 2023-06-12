@@ -7,7 +7,7 @@ import gliew
 
 pub fn main() {
   let assert Ok(_) =
-    gliew.serve(
+    gliew.new(
       8080,
       fn(req) {
         case req.method, request.path_segments(req) {
@@ -17,6 +17,7 @@ pub fn main() {
         }
       },
     )
+    |> gliew.serve
 
   process.sleep_forever()
 }
